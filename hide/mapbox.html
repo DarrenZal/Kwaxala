@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Globe Viewer - Mapbox GL JS</title>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css" rel="stylesheet" />
+  <script
+    src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.0/mapbox-gl-geocoder.min.js"></script>
+  <link rel="stylesheet"
+    href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.0/mapbox-gl-geocoder.css"
+    type="text/css" />
+  <script src="https://unpkg.com/@mapbox/togeojson@0.16.0/togeojson.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exif-js/2.3.0/exif.js"></script>
+  <style>
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    .search-container {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1;
+      width: 300px;
+    }
+
+    .mapboxgl-ctrl-geocoder {
+      width: 100%;
+      max-width: none;
+      box-shadow: 0 0 10px 2px rgba(0, 0, 0, 0.1);
+    }
+
+    .custom-map-control {
+      background-color: #fff;
+      border: none;
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 4px;
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+      margin-bottom: 5px;
+    }
+
+    .custom-map-control:hover {
+      background-color: #f2f2f2;
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    .info-panel {
+      position: absolute;
+      bottom: 20px;
+      /* Changed from top to bottom */
+      right: 20px;
+      width: 300px;
+      background: white;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      display: none;
+      max-height: 50vh;
+      /* Limit height to 50% of viewport height */
+      overflow-y: auto;
+      /* Add scrollbar if content exceeds max-height */
+    }
+
+    .kml-marker {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 120px;
+      /* Adjust based on your needs */
+    }
+
+    .kml-icon {
+      width: 30px;
+      height: 30px;
+      background-image: url("kwakiah-icon.png");
+      background-size: cover;
+      background-position: center;
+      border-radius: 50%;
+      border: 2px solid white;
+      cursor: pointer;
+      z-index: 2;
+    }
+
+    .kml-label {
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      margin-top: 5px;
+      font-size: 14px;
+      font-weight: bold;
+      text-align: center;
+      color: white;
+      max-width: 100%;
+      overflow-wrap: break-word;
+      padding: 2px 4px;
+      border-radius: 2px;
+    }
+
+    .mapboxgl-popup-content {
+      padding: 10px;
+      max-width: 200px;
+    }
+
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #ffffff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid #f3f3f3;
+      border-top: 5px solid #3498db;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    .marker {
+      background-size: cover;
+      cursor: pointer;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-spinner"></div>
+  </div>
+  <!-- <div class="search-container"> -->
+  <div id="geocoder" class="geocoder"></div>
+  </div>
+  <div id="info-panel" class="info-panel"></div>
+
+  <script type="module">
+    import { MAPBOX_ACCESS_TOKEN } from "./config.js";
+
+    mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
+
+
+    let map;
+    let mapLoaded = false;
+    let kmlLoaded = false;
+    let geojsonData;
+    let customGeocoder;
+    let spinEnabled = false;
+    let spinningInterval = null;
+
+    async function loadTerritoryPhotos() {
+  try {
+    console.log("Starting to load territory photos");
+    const response = await fetch('/list-territory-pics');
+    const imageFiles = await response.json();
+
+    console.log("Found images:", imageFiles);
+    const imagePromises = imageFiles.map(async filename => {
+      try {
+        const imageUrl = `territorypics/${filename}`;
+        console.log("Processing image:", imageUrl);
+        
+        const img = new Image();
+        
+        await new Promise((resolve, reject) => {
+          img.onload = () => {
+            console.log("Image loaded successfully:", imageUrl);
+            resolve();
+          };
+          img.onerror = (e) => {
+            console.error("Failed to load image:", imageUrl, e);
+            reject(e);
+          };
+          img.src = imageUrl;
+        });
+
+        await new Promise((resolve) => {
+          EXIF.getData(img, function() {
+            console.log("Reading EXIF data for:", imageUrl);
+            const lat = EXIF.getTag(this, "GPSLatitude");
+            const lon = EXIF.getTag(this, "GPSLongitude");
+            const direction = EXIF.getTag(this, "GPSImgDirection");
+            const directionRef = EXIF.getTag(this, "GPSImgDirectionRef") || "T"; // T = true north
+            
+            console.log("Raw GPS Data:", { lat, lon, direction, directionRef });
+            
+            if (lat && lon) {
+              try {
+                const latRef = EXIF.getTag(this, "GPSLatitudeRef") || "N";
+                const lonRef = EXIF.getTag(this, "GPSLongitudeRef") || "W";
+                
+                const latitude = convertDMSToDD(lat[0], lat[1], lat[2], latRef);
+                const longitude = convertDMSToDD(lon[0], lon[1], lon[2], lonRef);
+                
+                // Convert direction to degrees if it exists
+                let bearing = null;
+                if (direction !== undefined) {
+                  bearing = parseFloat(direction);
+                  if (directionRef === "M") {
+                    // Convert magnetic north to true north (approximate)
+                    // You might want to use a more accurate conversion based on location
+                    bearing += 15;
+                  }
+                }
+                
+                console.log("Processed data:", { latitude, longitude, bearing });
+                
+                if (!isNaN(latitude) && !isNaN(longitude)) {
+                  addImageMarker(latitude, longitude, filename, imageUrl, bearing);
+                  console.log("Added marker with bearing:", bearing);
+                }
+              } catch (error) {
+                console.error("Error processing GPS data for:", imageUrl, error);
+              }
+            } else {
+              console.log("No GPS data found in image:", imageUrl);
+            }
+            resolve();
+          });
+        });
+
+      } catch (error) {
+        console.error("Error processing image:", filename, error);
+      }
+    });
+
+    await Promise.all(imagePromises);
+    console.log("Finished processing all images");
+
+  } catch (error) {
+    console.error('Error in loadTerritoryPhotos:', error);
+  }
+}
+
+function addImageMarker(lat, lon, title, imageUrl, direction) {
+  try {
+    if (isNaN(lat) || isNaN(lon)) {
+      console.error("Invalid coordinates for marker:", { lat, lon, title });
+      return;
+    }
+
+    console.log("Adding marker at:", { lat, lon, title, direction });
+
+    const el = document.createElement("div");
+    el.className = "marker";
+    el.style.backgroundImage = "url(photo-icon.png)";
+    el.style.width = "30px";
+    el.style.height = "30px";
+    el.style.backgroundSize = "100%";
+
+    // If we have a direction, rotate the marker to match
+    if (direction !== null && !isNaN(direction)) {
+      el.style.transform = `rotate(${direction}deg)`;
+    }
+
+    const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
+      `<h3>${title}</h3>
+       <p>Direction: ${direction !== null ? direction.toFixed(1) + '°' : 'Unknown'}</p>
+       <img src="${imageUrl}" alt="${title}" style="width:100%;">`
+    );
+
+    const marker = new mapboxgl.Marker(el)
+      .setLngLat([lon, lat])
+      .setPopup(popup)
+      .addTo(map);
+
+    marker.getElement().addEventListener("click", () => {
+      // Calculate camera bearing
+      const bearing = direction !== null ? direction : 0;
+      
+      map.easeTo({
+        center: [lon, lat],
+        zoom: 14,
+        bearing: bearing,
+        pitch: 60,
+        duration: 2000
+      });
+    });
+
+    console.log("Successfully added marker for:", title);
+  } catch (error) {
+    console.error("Error adding marker:", { title, error });
+  }
+}
+
+
+function convertDMSToDD(degrees, minutes, seconds, direction) {
+  try {
+    // Ensure all values are numbers
+    degrees = parseFloat(degrees);
+    minutes = parseFloat(minutes);
+    seconds = parseFloat(seconds);
+
+    if (isNaN(degrees) || isNaN(minutes) || isNaN(seconds)) {
+      console.error("Invalid DMS values:", { degrees, minutes, seconds });
+      return NaN;
+    }
+
+    let dd = degrees + minutes / 60 + seconds / (60 * 60);
+    if (direction === "S" || direction === "W") {
+      dd = dd * -1;
+    }
+    return dd;
+  } catch (error) {
+    console.error("Error in convertDMSToDD:", error);
+    return NaN;
+  }
+}
+
+    const kmlColors = {
+      'TFL64.kml': '#FFD700', // bright yellow
+      'TFL39B5.kml': '#ff0052'  // orange
+    };
+
+    const kmlFiles = ['TFL64.kml', 'TFL39B5.kml'];
+
+    // Custom 3D toggle control
+    class ToggleMapControl {
+      constructor() {
+        this._map = null;
+        this._container = null;
+        this._toggleButton = null;
+        this._toggleView = this._toggleView.bind(this);
+      }
+
+      onAdd(map) {
+        this._map = map;
+        this._container = document.createElement("div");
+        this._container.className = "mapboxgl-ctrl mapboxgl-ctrl-group";
+
+        this._toggleButton = document.createElement("button");
+        this._toggleButton.className = "custom-map-control";
+        this._toggleButton.textContent = "3D";
+
+        this._container.appendChild(this._toggleButton);
+
+        this._toggleButton.addEventListener("click", this._toggleView);
+
+        return this._container;
+      }
+
+      onRemove() {
+        this._container.removeChild(this._toggleButton);
+        this._container.parentNode.removeChild(this._container);
+        this._map = undefined;
+      }
+
+      _toggleView() {
+        const is3D = this._map.getPitch() !== 0;
+        this._map.easeTo({
+          pitch: is3D ? 0 : 60,
+          duration: 1000,
+        });
+        this._toggleButton.textContent = is3D ? "3D" : "2D";
+      }
+    }
+
+    class PhotoUploadControl {
+      constructor() {
+        this._handleFileUpload = this._handleFileUpload.bind(this);
+      }
+
+      onAdd(map) {
+        this._map = map;
+        this._container = document.createElement("div");
+        this._container.className = "mapboxgl-ctrl mapboxgl-ctrl-group";
+
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.id = "file-input";
+        fileInput.accept = "image/*";
+        fileInput.multiple = true;
+        fileInput.style.display = "none";
+
+        const button = document.createElement("button");
+        button.className = "custom-map-control";
+        button.style.fontSize = "20px";
+        button.innerHTML = "📷";
+
+        this._container.appendChild(fileInput);
+        this._container.appendChild(button);
+
+        button.onclick = () => {
+          fileInput.click();
+        };
+
+        fileInput.addEventListener("change", this._handleFileUpload);
+
+        return this._container;
+      }
+
+      onRemove() {
+        this._container.parentNode.removeChild(this._container);
+        this._map = undefined;
+      }
+
+      _handleFileUpload(event) {
+        const files = event.target.files;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const reader = new FileReader();
+
+          reader.onload = (e) => {
+            const img = new Image();
+            img.src = e.target.result;
+
+            img.onload = () => {
+              EXIF.getData(img, () => {
+                const lat = EXIF.getTag(img, "GPSLatitude");
+                const lon = EXIF.getTag(img, "GPSLongitude");
+                const latRef = EXIF.getTag(img, "GPSLatitudeRef") || "N";
+                const lonRef = EXIF.getTag(img, "GPSLongitudeRef") || "W";
+                const direction = EXIF.getTag(img, "GPSImgDirection");
+
+                if (lat && lon) {
+                  const latitude = this._convertDMSToDD(
+                    lat[0],
+                    lat[1],
+                    lat[2],
+                    latRef
+                  );
+                  const longitude = this._convertDMSToDD(
+                    lon[0],
+                    lon[1],
+                    lon[2],
+                    lonRef
+                  );
+                  this._addImageMarker(
+                    latitude,
+                    longitude,
+                    file.name,
+                    URL.createObjectURL(file),
+                    direction
+                  );
+                } else {
+                  console.log("No GPS data found in the image.");
+                }
+              });
+            };
+          };
+
+          reader.readAsDataURL(file);
+        }
+      }
+
+      _convertDMSToDD(degrees, minutes, seconds, direction) {
+        let dd = degrees + minutes / 60 + seconds / (60 * 60);
+        if (direction == "S" || direction == "W") {
+          dd = dd * -1;
+        }
+        return dd;
+      }
+
+      _addImageMarker(lat, lon, title, imageUrl, direction) {
+        const el = document.createElement("div");
+        el.className = "marker";
+        el.style.backgroundImage = "url(photo-icon.png)";
+        el.style.width = "30px";
+        el.style.height = "30px";
+        el.style.backgroundSize = "100%";
+
+        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
+          `<h3>${title}</h3><img src="${imageUrl}" alt="${title}" style="width:100%;">`
+        );
+
+        const marker = new mapboxgl.Marker(el)
+          .setLngLat([lon, lat])
+          .setPopup(popup)
+          .addTo(this._map);
+
+        marker.getElement().addEventListener("click", () => {
+          this._map.easeTo({
+            center: [lon, lat],
+            zoom: 14,
+            bearing: direction || 0,
+            pitch: 60,
+            duration: 2000,
+          });
+        });
+      }
+    }
+
+    // Define customLocalGeocoder globally
+    function customLocalGeocoder(query) {
+      const matches = [];
+      if (geojsonData && geojsonData.features) {
+        geojsonData.features.forEach((feature, index) => {
+          const name = feature.properties.name;
+          if (name.toLowerCase().includes(query.toLowerCase())) {
+            const matchingFeature = {
+              ...feature,
+              id: `dataset-${index}`,
+              place_name: name,
+              center: getFeatureCenter(feature),
+            };
+            matches.push(matchingFeature);
+          }
+        });
+      }
+      return matches;
+    }
+
+    // Define the function to initialize the custom geocoder
+    function initializeCustomGeocoder() {
+      customGeocoder = new MapboxGeocoder({
+        accessToken: mapboxgl.accessToken,
+        mapboxgl: mapboxgl,
+        localGeocoder: customLocalGeocoder,
+        localGeocoderOnly: true,
+        zoom: 14,
+        placeholder: "Search for datasets",
+        marker: false,
+        render: function (item) {
+          return `<div class='geocoder-dropdown-item'>
+                <span>${item.properties.name || item.place_name}</span>
+              </div>`;
+        },
+      });
+
+      customGeocoder.on("result", function (e) {
+        const feature = e.result;
+        console.log("Geocoder feature:", feature);
+        zoomToFeature(feature);
+        showInfoPanel(feature, 0);
+      });
+
+      // Append the geocoder to the DOM
+      document
+        .getElementById("geocoder")
+        .appendChild(customGeocoder.onAdd(map));
+    }
+
+    // function to initialize the map but don't render it yet
+    async function initializeMap() {
+      map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/satellite-v9",
+        center: [-126.5, 51.5],
+        zoom: 8,
+        pitch: 45,
+        bearing: 0,
+        projection: "globe",
+        attributionControl: false,
+        renderWorldCopies: false
+      });
+
+      // Wait for style load
+      await new Promise(resolve => {
+        map.on('style.load', () => {
+          map.addSource("mapbox-dem", {
+            type: "raster-dem",
+            url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+            tileSize: 512,
+            maxzoom: 14,
+          });
+          map.setTerrain({ source: "mapbox-dem", exaggeration: 1.5 });
+
+          // Add atmosphere effect
+          map.setFog({
+            color: "rgb(186, 210, 235)",
+            "high-color": "rgb(36, 92, 223)",
+            "horizon-blend": 0.02,
+            "space-color": "rgb(11, 11, 25)",
+            "star-intensity": 0.6,
+          });
+
+          mapLoaded = true;
+          resolve();
+        });
+      });
+
+      // Add controls
+      map.addControl(new mapboxgl.NavigationControl(), "top-right");
+      map.addControl(new mapboxgl.FullscreenControl(), "top-right");
+      map.addControl(new ToggleMapControl(), "top-right");
+      map.addControl(new PhotoUploadControl(), "top-right");
+
+
+
+      initializeCustomGeocoder();
+
+      // Remove standalone map.on("load") section and put any essential code here
+      for (const kmlFile of kmlFiles) {
+        const color = kmlColors[kmlFile];
+        const geojsonData = await processKMLFile(kmlFile, color);
+      }
+    }
+
+
+    function getAllFeaturesBounds(results) {
+      const bounds = new mapboxgl.LngLatBounds();
+      results.forEach(geojsonData => {
+        if (geojsonData && geojsonData.features) {
+          geojsonData.features.forEach(feature => {
+            extendBounds(feature.geometry, bounds);
+          });
+        }
+      });
+      return bounds;
+    }
+
+    function calculateCentralPoint(results) {
+      let sumLat = 0;
+      let sumLng = 0;
+      let count = 0;
+
+      results.forEach(geojsonData => {
+        if (geojsonData && geojsonData.features) {
+          const bounds = new mapboxgl.LngLatBounds();
+          geojsonData.features.forEach(feature => {
+            extendBounds(feature.geometry, bounds);
+          });
+          const center = bounds.getCenter();
+          sumLat += center.lat;
+          sumLng += center.lng;
+          count++;
+        }
+      });
+
+      return {
+        lat: sumLat / count,
+        lng: sumLng / count
+      };
+    }
+
+    // Create a function to load KML files
+    async function loadKMLFiles() {
+      const bounds = new mapboxgl.LngLatBounds();
+      let allFeatures = [];
+
+      const kmlPromises = kmlFiles.map(async kmlFile => {
+        const color = kmlColors[kmlFile];
+        return processKMLFile(kmlFile, color);
+      });
+
+      const results = await Promise.all(kmlPromises);
+
+      results.forEach((geojsonData, index) => {
+        if (geojsonData) {
+          const kmlFile = kmlFiles[index];
+          const color = kmlColors[kmlFile];
+
+          allFeatures = allFeatures.concat(geojsonData.features);
+
+          // First add the main source for the KML data
+          const sourceId = `kml-data-${kmlFile}`;
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: geojsonData,
+          });
+
+          // Add the outline layer
+          map.addLayer({
+            id: `kml-polygon-outlines-${kmlFile}`,
+            type: "line",
+            source: sourceId,
+            paint: {
+              "line-color": color,
+              "line-width": 2,
+              "line-opacity": 0.8,
+            },
+            filter: ["==", ["geometry-type"], "Polygon"],
+          });
+
+          // Calculate center point for the single label
+          const featureBounds = new mapboxgl.LngLatBounds();
+          geojsonData.features.forEach(feature => {
+            extendBounds(feature.geometry, featureBounds);
+          });
+          const center = featureBounds.getCenter();
+
+          // Add point source for the single label
+          map.addSource(`label-point-${kmlFile}`, {
+            type: 'geojson',
+            data: {
+              type: 'FeatureCollection',
+              features: [{
+                type: 'Feature',
+                geometry: {
+                  type: 'Point',
+                  coordinates: [center.lng, center.lat]
+                },
+                properties: {
+                  name: kmlFile.replace('.kml', '')
+                }
+              }]
+            }
+          });
+
+          // Add the label layer using the point source
+          map.addLayer({
+            id: `kml-labels-${kmlFile}`,
+            type: 'symbol',
+            source: `label-point-${kmlFile}`,
+            layout: {
+              'text-field': ['get', 'name'],
+              'text-size': 16,
+              'text-allow-overlap': true,
+              'text-ignore-placement': true,
+              'text-anchor': 'center'
+            },
+            paint: {
+              'text-color': color,
+              'text-halo-color': '#000',
+              'text-halo-width': 2
+            }
+          });
+
+          // Only add the Kwikiah marker for the first KML file
+          if (index === 0) {
+            const kwikiahMarker = document.createElement("div");
+            kwikiahMarker.className = "kml-marker";
+
+            const kwikiahIcon = document.createElement("div");
+            kwikiahIcon.className = "kml-icon";
+
+            const kwikiahLabel = document.createElement("div");
+            kwikiahLabel.className = "kml-label";
+            kwikiahLabel.textContent = "Kwiakah";
+            kwikiahLabel.style.textShadow = `-1px -1px 0 ${color}, 1px -1px 0 ${color}, -1px 1px 0 ${color}, 1px 1px 0 ${color}`;
+
+            kwikiahMarker.appendChild(kwikiahIcon);
+            kwikiahMarker.appendChild(kwikiahLabel);
+
+            // Calculate the central point between all KML files
+            const centralPoint = calculateCentralPoint(results);
+
+            new mapboxgl.Marker({
+              element: kwikiahMarker,
+              anchor: "bottom",
+            })
+              .setLngLat([centralPoint.lng, centralPoint.lat])
+              .addTo(map);
+
+            // Updated click handler to zoom to all features
+            kwikiahIcon.addEventListener("click", () => {
+              const allBounds = getAllFeaturesBounds(results);
+              if (!allBounds.isEmpty()) {
+                map.fitBounds(allBounds, {
+                  padding: { top: 150, bottom: 150, left: 150, right: 150 },
+                  pitch: 45,
+                  duration: 1000,
+                  maxZoom: 9
+                });
+              }
+              showInfoPanel(geojsonData.features[0], 0);
+            });
+          }
+
+          // Extend bounds for all features
+          geojsonData.features.forEach(feature => {
+            extendBounds(feature.geometry, bounds);
+          });
+        }
+      });
+
+      // Update global geojsonData
+      geojsonData = {
+        type: "FeatureCollection",
+        features: allFeatures
+      };
+
+      // Fit bounds once at the end
+      if (!bounds.isEmpty()) {
+        map.fitBounds(bounds, {
+          padding: { top: 150, bottom: 150, left: 150, right: 150 },
+          pitch: 45,
+          duration: 0,
+          maxZoom: 9,
+          offset: [0, 0] // Center the view
+        });
+      }
+
+      kmlLoaded = true;
+    }
+    async function processKMLFile(kmlUrl, color) {
+      try {
+        const response = await fetch(kmlUrl);
+        const kmlData = await response.text();
+        const parser = new DOMParser();
+        const kml = parser.parseFromString(kmlData, "text/xml");
+        const geojsonData = toGeoJSON.kml(kml);
+
+        // Keep original filename as kmlName but set display name as Kwiakah
+        geojsonData.features.forEach((feature) => {
+          feature.properties.kmlName = kmlUrl.replace('.kml', ''); // Keep original KML name
+          feature.properties.displayName = 'Kwiakah'; // Add display name
+          feature.properties.color = color;
+        });
+
+        return geojsonData;
+      } catch (error) {
+        console.error(`Error processing ${kmlUrl}:`, error);
+        return null;
+      }
+    }
+
+    // Main initialization function
+    async function initialize() {
+  try {
+    // Show loading overlay
+    document.getElementById('loading-overlay').style.display = 'flex';
+
+    // Initialize map first
+    await initializeMap();
+    
+    // Now load KML files and territory photos after map is ready
+    await Promise.all([
+      loadKMLFiles(),
+      loadTerritoryPhotos()
+    ]);
+
+    // Hide loading overlay only when everything is ready
+    document.getElementById('loading-overlay').style.display = 'none';
+  } catch (error) {
+    console.error('Error during initialization:', error);
+    document.getElementById('loading-overlay').style.display = 'none';
+  }
+}
+
+
+
+    // Start initialization when the page loads
+    document.addEventListener('DOMContentLoaded', initialize);
+
+
+
+    function getFeatureCenter(feature) {
+      const bounds = new mapboxgl.LngLatBounds();
+      extendBounds(feature.geometry, bounds);
+      return bounds.getCenter();
+    }
+
+    // Move this function outside of the fetch chain
+    function extendBounds(geometry, bounds) {
+      if (geometry.type === "Point") {
+        bounds.extend(geometry.coordinates);
+      } else if (geometry.type === "LineString" || geometry.type === "MultiPoint") {
+        geometry.coordinates.forEach(coord => bounds.extend(coord));
+      } else if (geometry.type === "Polygon" || geometry.type === "MultiLineString") {
+        geometry.coordinates.forEach(ring =>
+          ring.forEach(coord => bounds.extend(coord))
+        );
+      } else if (geometry.type === "MultiPolygon") {
+        geometry.coordinates.forEach(polygon =>
+          polygon.forEach(ring =>
+            ring.forEach(coord => bounds.extend(coord))
+          )
+        );
+      } else if (geometry.type === "GeometryCollection") {
+        geometry.geometries.forEach(geom => extendBounds(geom, bounds));
+      }
+    }
+
+  </script>
+</body>
+
+</html>
